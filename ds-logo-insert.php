@@ -1,146 +1,150 @@
 <?php
 /*
- * Plugin Name: Selective Media Cloud Watermarker
- * Description: Watermarks images only when uploaded through special section before offloading to S3
+ * Plugin Name: Direct Watermark Uploader
+ * Description: Upload and watermark images directly from device
  * Author: Your Name
  */
 
 // Watermark configuration
 define('WATERMARK_LOGO_PATH', plugin_dir_path(__FILE__) . '/logo.png');
-define('WATERMARK_OPACITY', 50); // 0-100%
-define('WATERMARK_POSITION', 'bottom-right'); // top-left, top-right, center, bottom-left, bottom-right
+define('WATERMARK_OPACITY', 50);
+define('WATERMARK_POSITION', 'bottom-right');
 
-class SelectiveMediaWatermarker {
-    
-    private $should_watermark = false;
-    
+class DirectWatermarkUploader {
+
+    private $watermarking_enabled = true;
+
     public function __construct() {
-        // Add admin menu for watermark uploads
         add_action('admin_menu', [$this, 'add_admin_menu']);
-        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
-        
-        // Hook into upload process - but only watermark when flag is set
-        add_filter('wp_handle_upload', [$this, 'maybe_watermark_before_offload'], 5);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_scripts']);
+        add_filter('wp_handle_upload', [$this, 'apply_watermark_before_upload'], 10, 2);
+        add_action('wp_ajax_handle_direct_watermark_upload', [$this, 'handle_direct_upload']);
     }
-    
+
     public function add_admin_menu() {
         add_menu_page(
-            'Watermark Uploads',
-            'Watermark Uploads',
+            'Direct Watermark Upload',
+            'Watermark Upload',
             'upload_files',
-            'watermark-uploads',
+            'direct-watermark-upload',
             [$this, 'render_upload_page'],
             'dashicons-format-image',
             21
         );
     }
-    
-    public function enqueue_admin_scripts($hook) {
-        if ($hook === 'toplevel_page_watermark-uploads') {
-            wp_enqueue_media();
-            wp_enqueue_script(
-                'watermark-upload-js',
-                plugin_dir_url(__FILE__) . 'watermark-upload.js',
-                ['jquery'],
-                '1.0',
-                true
-            );
+
+    public function enqueue_scripts($hook) {
+        if ($hook !== 'toplevel_page_direct-watermark-upload') {
+            return;
         }
+
+        wp_enqueue_script(
+            'direct-watermark-upload',
+            plugin_dir_url(__FILE__) . 'upload.js',
+            ['jquery'],
+            '1.0',
+            true
+        );
+
+        wp_localize_script('direct-watermark-upload', 'watermarkUploader', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('watermark_upload_nonce')
+        ]);
     }
-    
+
     public function render_upload_page() {
         ?>
         <div class="wrap">
-            <h1>Upload Watermarked Images</h1>
+            <h1>Direct Watermark Upload</h1>
             
             <div class="card">
-                <h2>Upload Image with Watermark</h2>
-                <p>Images uploaded here will automatically be watermarked before being sent to S3.</p>
+                <h2>Upload & Watermark Images</h2>
                 
-                <form id="watermark-upload-form" method="post" enctype="multipart/form-data">
-                    <?php wp_nonce_field('watermark_upload_nonce', 'watermark_nonce'); ?>
-                    
-                    <div id="watermark-uploader">
-                        <input type="file" id="watermark-file-input" name="watermark_file" accept="image/*" required>
-                        <button type="submit" class="button button-primary">Upload & Watermark</button>
+                <div id="upload-container">
+                    <input type="file" id="watermark-file-input" multiple accept="image/*" style="display: none;">
+                    <button id="select-files" class="button button-primary">Select Images</button>
+                    <button id="upload-files" class="button button-secondary" disabled>Upload & Watermark</button>
+                </div>
+                
+                <div id="file-preview" style="margin-top: 20px; display: none;">
+                    <h3>Selected Files (<span id="file-count">0</span>)</h3>
+                    <div id="preview-grid" style="display: flex; flex-wrap: wrap; gap: 10px;"></div>
+                </div>
+                
+                <div id="upload-progress" style="margin-top: 20px; display: none;">
+                    <div style="width: 100%; background: #f1f1f1;">
+                        <div id="progress-bar" style="height: 20px; width: 0%; background: #2271b1;"></div>
                     </div>
-                    
-                    <div id="watermark-upload-progress" style="display: none; margin-top: 20px;">
-                        <p>Uploading and applying watermark...</p>
-                        <div class="progress-bar"><div class="progress"></div></div>
-                    </div>
-                    
-                    <div id="watermark-upload-result" style="margin-top: 20px;"></div>
-                </form>
+                    <p id="progress-text">Ready to upload</p>
+                </div>
+                
+                <div id="upload-results" style="margin-top: 20px;"></div>
             </div>
         </div>
         <?php
     }
-    
-    public function maybe_watermark_before_offload($upload) {
-        // Only watermark if our flag is set
-        if (!$this->should_watermark) {
-            return $upload;
-        }
+
+    public function handle_direct_upload() {
+        check_ajax_referer('watermark_upload_nonce', 'nonce');
         
-        // Reset flag immediately so it doesn't affect other uploads
-        $this->should_watermark = false;
+        if (!current_user_can('upload_files') || empty($_FILES['files'])) {
+            wp_send_json_error('Invalid request');
+        }
 
-        // Skip if not an image
-        if (!preg_match('/^image\//', $upload['type'])) {
+        require_once(ABSPATH . 'wp-admin/includes/image.php');
+        require_once(ABSPATH . 'wp-admin/includes/file.php');
+        require_once(ABSPATH . 'wp-admin/includes/media.php');
+
+        $results = [];
+        $this->watermarking_enabled = true;
+
+        foreach ($_FILES['files']['name'] as $key => $value) {
+            $file = [
+                'name' => $_FILES['files']['name'][$key],
+                'type' => $_FILES['files']['type'][$key],
+                'tmp_name' => $_FILES['files']['tmp_name'][$key],
+                'error' => $_FILES['files']['error'][$key],
+                'size' => $_FILES['files']['size'][$key]
+            ];
+
+            $attachment_id = media_handle_sideload($file, 0);
+            
+            if (is_wp_error($attachment_id)) {
+                $results[] = [
+                    'name' => $file['name'],
+                    'success' => false,
+                    'message' => $attachment_id->get_error_message()
+                ];
+            } else {
+                $results[] = [
+                    'name' => $file['name'],
+                    'success' => true,
+                    'message' => 'Uploaded and watermarked',
+                    'url' => wp_get_attachment_url($attachment_id),
+                    'id' => $attachment_id
+                ];
+            }
+        }
+
+        $this->watermarking_enabled = false;
+        wp_send_json_success($results);
+    }
+
+    public function apply_watermark_before_upload($upload, $context) {
+        if (!$this->watermarking_enabled || !preg_match('/^image\//', $upload['type'])) {
             return $upload;
         }
 
-        // Apply watermark (overwrites original file)
         if ($this->apply_watermark($upload['file'], WATERMARK_LOGO_PATH, WATERMARK_OPACITY, WATERMARK_POSITION)) {
-            // Update file size in case it changed
             $upload['size'] = filesize($upload['file']);
         }
         
         return $upload;
     }
-    
-    /**
-     * Handle the custom watermark upload form submission
-     */
-    public function handle_watermark_upload() {
-        if (!isset($_POST['watermark_nonce']) || !wp_verify_nonce($_POST['watermark_nonce'], 'watermark_upload_nonce')) {
-            wp_die('Security check failed');
-        }
-        
-        if (!current_user_can('upload_files')) {
-            wp_die('You do not have permission to upload files');
-        }
-        
-        if (empty($_FILES['watermark_file'])) {
-            wp_die('No file was uploaded');
-        }
-        
-        // Set flag to watermark this upload
-        $this->should_watermark = true;
-        
-        // Use WordPress media_handle_upload to process the file
-        require_once(ABSPATH . 'wp-admin/includes/image.php');
-        require_once(ABSPATH . 'wp-admin/includes/file.php');
-        require_once(ABSPATH . 'wp-admin/includes/media.php');
-        
-        $attachment_id = media_handle_upload('watermark_file', 0);
-        
-        if (is_wp_error($attachment_id)) {
-            wp_die('Upload failed: ' . $attachment_id->get_error_message());
-        }
-        
-        // Success - redirect to media library or show success message
-        wp_redirect(admin_url('upload.php?watermark_success=1'));
-        exit;
-    }
-    
-    /**
-     * Core watermarking function (same as your original)
-     */
+
     private function apply_watermark($image_path, $logo_path, $opacity = 50, $position = 'bottom-left') {
-        // Check if files exist
-        if (!file_exists($image_path) || !file_exists($logo_path)) {
+           // Check if files exist
+           if (!file_exists($image_path) || !file_exists($logo_path)) {
             error_log("Watermark error: Image or logo file not found");
             return false;
         }
@@ -224,10 +228,4 @@ class SelectiveMediaWatermarker {
     }
 }
 
-// Initialize the plugin
-$selective_media_watermarker = new SelectiveMediaWatermarker();
-
-// Handle form submission
-if (is_admin() && isset($_POST['watermark_nonce'])) {
-    add_action('init', [$selective_media_watermarker, 'handle_watermark_upload']);
-}
+new DirectWatermarkUploader();
