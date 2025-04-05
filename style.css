@@ -1,0 +1,13 @@
+.logo-checkbox {
+    position: absolute;
+    top: 5%;
+    right: 5%;
+    z-index: 1000;
+}
+
+#add-logo-button{
+    position: absolute;
+    top: 157px;
+    left: 38%;
+}
+    
