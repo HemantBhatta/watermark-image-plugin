@@ -1,8 +1,8 @@
 <?php
 /*
  * Plugin Name: Direct Watermark Uploader
- * Description: Upload and watermark images directly from device
- * Author: Your Name
+ * Description: Upload and watermark deshsanchar images directly from device through custom interface only
+ * Author: Hemant Bhatta
  */
 
 // Watermark configuration
@@ -12,7 +12,7 @@ define('WATERMARK_POSITION', 'bottom-right');
 
 class DirectWatermarkUploader {
 
-    private $watermarking_enabled = true;
+    private $watermarking_enabled = false; // Default to false
 
     public function __construct() {
         add_action('admin_menu', [$this, 'add_admin_menu']);
@@ -23,8 +23,8 @@ class DirectWatermarkUploader {
 
     public function add_admin_menu() {
         add_menu_page(
-            'Direct Watermark Upload',
-            'Watermark Upload',
+            'Watermark Deshsanchar Images',
+            'Watermark Deshsanchar Images',
             'upload_files',
             'direct-watermark-upload',
             [$this, 'render_upload_page'],
@@ -55,10 +55,10 @@ class DirectWatermarkUploader {
     public function render_upload_page() {
         ?>
         <div class="wrap">
-            <h1>Direct Watermark Upload</h1>
+            <h1>Put Deshsanchar Logo in Images</h1>
             
             <div class="card">
-                <h2>Upload & Watermark Images</h2>
+                <h2>Upload & Watermark Deshsanchar Images</h2>
                 
                 <div id="upload-container">
                     <input type="file" id="watermark-file-input" multiple accept="image/*" style="display: none;">
@@ -96,7 +96,7 @@ class DirectWatermarkUploader {
         require_once(ABSPATH . 'wp-admin/includes/media.php');
 
         $results = [];
-        $this->watermarking_enabled = true;
+        $this->watermarking_enabled = true; // Enable watermarking JUST for this request
 
         foreach ($_FILES['files']['name'] as $key => $value) {
             $file = [
@@ -126,11 +126,12 @@ class DirectWatermarkUploader {
             }
         }
 
-        $this->watermarking_enabled = false;
+        $this->watermarking_enabled = false; // Disable again after processing
         wp_send_json_success($results);
     }
 
     public function apply_watermark_before_upload($upload, $context) {
+        // Only watermark if our flag is set AND it's an image
         if (!$this->watermarking_enabled || !preg_match('/^image\//', $upload['type'])) {
             return $upload;
         }
@@ -210,7 +211,7 @@ class DirectWatermarkUploader {
         // Apply watermark
         imagealphablending($image, true);
         imagesavealpha($image, true);
-        imagecopy($image, $watermark, $pos_x, $pos_y, 0, 0, $target_width, $target_height);
+        imagecopy($image, $watermark, 20, $pos_y, 0, 0, $target_width, $target_height);
 
         // Save the watermarked image (overwrite original)
         $success = match ($image_type) {
